@@ -1,4 +1,4 @@
 BioPseudogene
 =======================
 
-A perl module to manipulate aligments of pseudogenes
+A perl module to manipulate alignments of pseudogenes
