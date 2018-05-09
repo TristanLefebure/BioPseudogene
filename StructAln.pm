@@ -1,4 +1,6 @@
 #T LEFEBURE 16 juin 2011
+#T LEFEBURE 8 may 2018:
+#  - fixed bug in isInIntron
 
 package Pseudogene::StructAln;
 use Bio::SimpleAlign;
@@ -20,45 +22,46 @@ sub makeStructureLine {
     my $j = 0; #sequence position
     my $outstring = '';
     foreach my $b (@bases) {
-	#if a gap
-	if($b eq '-') {
-	    #test if in an intron
-	    if(isInIntron($j, $intronCoord)) {
-		print "position $j is in an intron\n" if $verbose;
-		$outstring .= 'i';
-	    }
-	    else {
-		if($n < 1 or $n == 3) {
-		    #extra codon insertion
-		    $outstring .= '-';
-		}
-		elsif($n >= 1 and $n < 3) {
-		    #intra codon gap
-		    if($nox) {
-			$outstring .= '-';
+		#if a gap
+		if($b eq '-') {
+		    #test if in an intron
+		    if(isInIntron($j, $intronCoord)) {
+				print "position $j is in an intron\n" if $verbose;
+				$outstring .= 'i';
 		    }
-		    else { $outstring .= 'x' }
+		    else {
+				if($n < 1 or $n == 3) {
+				    #extra codon insertion
+				    $outstring .= '-';
+				}
+				elsif($n >= 1 and $n < 3) {
+				    #intra codon gap
+				    if($nox) {
+					$outstring .= '-';
+				    }
+				    else { $outstring .= 'x' }
+				}
+				else { die "WTF: not possible!\n"; }
+		    }
 		}
-		else { die "WTF: not possible!\n"; }
-	    }
-	}
-	#if a base
-	elsif ($b =~ /[A-Z]/i) {
-	    ++$j;
-	    #test if in an intron
-	    if(isInIntron($j, $intronCoord)) {
-		print "position $j is inside an intron\n" if $verbose;
-		$outstring .= 'i';
-	    }
-	    else {
-		++$n;
-		$n = 1 if $n == 4; #reset the counter
-		#recode the numbers into letters to fit into a protein code
-		$outstring .= $$convertion{$n};
-	    }
-	}
-	print "Position $j, codon $n, base $b\n" if $verbose;
+		#if a base
+		elsif ($b =~ /[A-Z]/i) {
+		    ++$j;
+		    #test if in an intron
+		    if(isInIntron($j, $intronCoord)) {
+				print "position $j is inside an intron\n" if $verbose;
+				$outstring .= 'i';
+		    }
+		    else {
+				++$n;
+				$n = 1 if $n == 4; #reset the counter
+				#recode the numbers into letters to fit into a protein code
+				$outstring .= $$convertion{$n};
+		    }
+		}
+		print "Position $j, codon $n, base $b\n" if $verbose;
     }
+    print "Struct = $outstring\n" if $verbose;
     (my $temp = $outstring) =~ s/-//g;
     my $length = length($temp );
 #     print "$length\n";
@@ -72,22 +75,27 @@ sub makeStructureLine {
     return $strucSeq;
 }
 
-#test if a base is within an intron
+#test if a base is within an intron 
+#### there must be a bug here when there is multiple introns !
 sub isInIntron {
     my ($n, $intronCoord) = @_;
 #     print "$n\n";
+	my $answer = 0;
     foreach my $intr (keys %$intronCoord) {
-	my $start = $intronCoord->{$intr}->{'start'};
-	my $end = $intronCoord->{$intr}->{'end'};
-# 	print "$n is $start -- $end ?\n";
-	if($n < $start or $n > $end) {
-	    return 0;
-	}
-	elsif ($n >= $start and $n <= $end) {
-	    return 1;
-	}
-	else { die "WTF: this is not possible\n" }
+		my $start = $intronCoord->{$intr}->{'start'};
+		my $end = $intronCoord->{$intr}->{'end'};
+	# 	print "$n is $start -- $end ?\n";
+		if($n < $start or $n > $end) {
+			#not an intron
+		    next;
+		}
+		elsif ($n >= $start and $n <= $end) {
+			#an intron
+		    $answer = 1;
+		}
+		else { die "WTF: this is not possible\n" }
     }
+    return $answer;
 }
 
 #mask an intron with Ns
@@ -171,7 +179,14 @@ sub compareSeq {
     return $consensus;
 }
 
-#transform into m|i|d
+#transform into m|i|d|g
+#meaning:
+# m: match
+# i:insertion
+# d:deletion
+# g:gap
+# 9mai2018: modified to allow introns within a codon. This adds a new letter: T
+# 
 sub compareBase {
     my ($b1, $b2) = @_;
     #transform x in - in the seq
@@ -180,6 +195,7 @@ sub compareBase {
     elsif($b1 =~ /\d/ and $b2 =~ /-/) { return 'd' }
     elsif($b1 =~ /[-x]/i and $b2 =~ /\w/) { return 'i' }
     elsif($b1 =~ /[-x]/i and $b2 =~ /-/) { return 'g' }
+    elsif($b1 eq 'i') { return 'T'}
     else { die "WTF: comparision of $b1 and $b2 doesn't make sense!\n" }
 }
 
@@ -371,6 +387,7 @@ sub get_all_stop_position {
 
 #convert a struct codon to a 3 base codon
 #by removing the deletions and insertions
+#from the extended codons
 sub convert_to_codon {
     my (%args) = @_;
 #     my ($seq, $ref) = @_;
@@ -379,18 +396,19 @@ sub convert_to_codon {
     my @s = split '', $args{-SEQ};
     my $indel;
     for (my $i = 0; $i <= length($args{-REF})-1; ++$i) {
-# 	print "$i: Compare $r[$i] versus $s[$i]\n" if $verbose;
-	my $desc = compareBase($r[$i], $s[$i]);
-	if($desc eq 'm') { $newseq .= $s[$i] }
-	elsif($desc eq 'd') { 
-	    $newseq .= 'N';
-	    $indel = 1;
-	}
-	elsif($desc eq 'i') {
-	    $indel = 1;
-	    next;
-	}
-	elsif ($desc eq 'g') { next }
+	# 	print "$i: Compare $r[$i] versus $s[$i]\n" if $verbose;
+		my $desc = compareBase($r[$i], $s[$i]);
+		if($desc eq 'm') { $newseq .= $s[$i] }
+		elsif($desc eq 'd') { 
+		    $newseq .= 'N';
+		    $indel = 1;
+		}
+		elsif($desc eq 'i') {
+		    $indel = 1;
+		    next;
+		}
+		elsif($desc eq 'g') { next }
+		elsif($desc eq 'T') { next }
     }
     if($indel and $args{-MASK}) { $newseq =~ s/[-\w]/N/g }
     return $newseq;
